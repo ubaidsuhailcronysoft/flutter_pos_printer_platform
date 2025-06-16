@@ -44,7 +44,7 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
                         state = STATE_USB_CONNECTED
                         mHandler?.obtainMessage(STATE_USB_CONNECTED)?.sendToTarget()
                     } else {
-                        Toast.makeText(context, mContext?.getString(R.string.user_refuse_perm) + ": ${usbDevice!!.deviceName}", Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, mContext?.getString(R.string.user_refuse_perm) + ": ${usbDevice?.deviceName ?: "Unknown Device"}", Toast.LENGTH_LONG).show()
                         state = STATE_USB_NONE
                         mHandler?.obtainMessage(STATE_USB_NONE)?.sendToTarget()
                     }
