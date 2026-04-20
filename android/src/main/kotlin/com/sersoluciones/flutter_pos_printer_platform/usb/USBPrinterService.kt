@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.*
+import android.os.Build
 import android.os.Handler
 import android.util.Base64
 import android.util.Log
@@ -33,8 +34,13 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
         override fun onReceive(context: Context, intent: Intent) {
             val action = intent.action
             if ((ACTION_USB_PERMISSION == action)) {
-                synchronized(this) {
-                    val usbDevice: UsbDevice? = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                synchronized(printLock) {
+                    val usbDevice: UsbDevice? = if (Build.VERSION.SDK_INT >= 33) {
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                    }
                     if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
                         Log.i(
                             LOG_TAG,
@@ -44,25 +50,28 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
                         state = STATE_USB_CONNECTED
                         mHandler?.obtainMessage(STATE_USB_CONNECTED)?.sendToTarget()
                     } else {
-                        Toast.makeText(context, mContext?.getString(R.string.user_refuse_perm) + ": ${usbDevice?.deviceName ?: "Unknown Device"}", Toast.LENGTH_LONG).show()
+                        Toast.makeText(
+                            context,
+                            mContext?.getString(R.string.user_refuse_perm) + ": ${usbDevice?.deviceName ?: "Unknown Device"}",
+                            Toast.LENGTH_LONG
+                        ).show()
                         state = STATE_USB_NONE
                         mHandler?.obtainMessage(STATE_USB_NONE)?.sendToTarget()
                     }
                 }
             } else if ((UsbManager.ACTION_USB_DEVICE_DETACHED == action)) {
-
                 if (mUsbDevice != null) {
-                    Toast.makeText(context, mContext?.getString(R.string.device_off), Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                        context,
+                        mContext?.getString(R.string.device_off),
+                        Toast.LENGTH_LONG
+                    ).show()
                     closeConnectionIfExists()
                     state = STATE_USB_NONE
                     mHandler?.obtainMessage(STATE_USB_NONE)?.sendToTarget()
                 }
-
             } else if ((UsbManager.ACTION_USB_DEVICE_ATTACHED == action)) {
-//                if (mUsbDevice != null) {
-//                    Toast.makeText(context, "USB device has been turned off", Toast.LENGTH_LONG).show()
-//                    closeConnectionIfExists()
-//                }
+                // currently unused
             }
         }
     }
@@ -71,19 +80,33 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
         mContext = reactContext
         mUSBManager = mContext!!.getSystemService(Context.USB_SERVICE) as UsbManager
 
-        val GetEXTRA_PERMISSION_GRANTEDIntent = Intent(ACTION_USB_PERMISSION).apply {
-            putExtra(UsbManager.EXTRA_PERMISSION_GRANTED, true)
+        val usbPermissionIntent = Intent(ACTION_USB_PERMISSION).apply {
             setPackage(mContext?.packageName)
         }
-         
-        mPermissionIndent = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-            PendingIntent.getBroadcast(mContext, 0, GetEXTRA_PERMISSION_GRANTEDIntent, PendingIntent.FLAG_MUTABLE)
+
+        mPermissionIndent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            PendingIntent.getBroadcast(
+                mContext, 0, usbPermissionIntent,
+                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
         } else {
-            PendingIntent.getBroadcast(mContext, 0, GetEXTRA_PERMISSION_GRANTEDIntent, 0)
+            PendingIntent.getBroadcast(
+                mContext, 0, usbPermissionIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT
+            )
         }
-        val filter = IntentFilter(ACTION_USB_PERMISSION)
-        filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
-        mContext!!.registerReceiver(mUsbDeviceReceiver, filter)
+
+        val filter = IntentFilter(ACTION_USB_PERMISSION).apply {
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        }
+
+        // RECEIVER_EXPORTED was added in API 34 (Android 14)
+        if (Build.VERSION.SDK_INT >= 34) {
+            mContext!!.registerReceiver(mUsbDeviceReceiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            mContext!!.registerReceiver(mUsbDeviceReceiver, filter)
+        }
+
         Log.v(LOG_TAG, "ESC/POS Printer initialized")
     }
 
@@ -101,21 +124,27 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
     val deviceList: List<UsbDevice>
         get() {
             if (mUSBManager == null) {
-                Toast.makeText(mContext, mContext?.getString(R.string.not_usb_manager), Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    mContext,
+                    mContext?.getString(R.string.not_usb_manager),
+                    Toast.LENGTH_LONG
+                ).show()
                 return emptyList()
             }
             return ArrayList(mUSBManager!!.deviceList.values)
         }
 
     fun selectDevice(vendorId: Int, productId: Int): Boolean {
-//        Log.v(LOG_TAG, " status usb ______ $state")
         if ((mUsbDevice == null) || (mUsbDevice!!.vendorId != vendorId) || (mUsbDevice!!.productId != productId)) {
             synchronized(printLock) {
                 closeConnectionIfExists()
                 val usbDevices: List<UsbDevice> = deviceList
                 for (usbDevice: UsbDevice in usbDevices) {
                     if ((usbDevice.vendorId == vendorId) && (usbDevice.productId == productId)) {
-                        Log.v(LOG_TAG, "Request for device: vendor_id: " + usbDevice.vendorId + ", product_id: " + usbDevice.productId)
+                        Log.v(
+                            LOG_TAG,
+                            "Request for device: vendor_id: " + usbDevice.vendorId + ", product_id: " + usbDevice.productId
+                        )
                         closeConnectionIfExists()
                         mUSBManager!!.requestPermission(usbDevice, mPermissionIndent)
                         state = STATE_USB_CONNECTING
@@ -128,7 +157,6 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
         } else {
             mHandler?.obtainMessage(state)?.sendToTarget()
         }
-
         return true
     }
 
@@ -155,7 +183,11 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
                         Log.e(LOG_TAG, "Failed to open USB Connection")
                         return false
                     }
-                    Toast.makeText(mContext, mContext?.getString(R.string.connected_device), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        mContext,
+                        mContext?.getString(R.string.connected_device),
+                        Toast.LENGTH_SHORT
+                    ).show()
                     return if (usbDeviceConnection.claimInterface(usbInterface, true)) {
                         mEndPoint = ep
                         mUsbInterface = usbInterface
@@ -237,12 +269,19 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
                                 ++chunks
                             }
                             for (i in 0 until chunks) {
-//                                val buffer: ByteArray = byteData.copyOfRange(i * chunkSize, chunkSize + i * chunkSize)
-                                val buffer: ByteArray = Arrays.copyOfRange(byteData, i * chunkSize, chunkSize + i * chunkSize)
-                                b = mUsbDeviceConnection!!.bulkTransfer(mEndPoint, buffer, chunkSize, 100000)
+                                val buffer: ByteArray = Arrays.copyOfRange(
+                                    byteData,
+                                    i * chunkSize,
+                                    chunkSize + i * chunkSize
+                                )
+                                b = mUsbDeviceConnection!!.bulkTransfer(
+                                    mEndPoint, buffer, chunkSize, 100000
+                                )
                             }
                         } else {
-                            b = mUsbDeviceConnection!!.bulkTransfer(mEndPoint, byteData, byteData.size, 100000)
+                            b = mUsbDeviceConnection!!.bulkTransfer(
+                                mEndPoint, byteData, byteData.size, 100000
+                            )
                         }
                         Log.i(LOG_TAG, "Return code: $b")
                     }
@@ -261,10 +300,9 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
         private const val LOG_TAG = "ESC POS Printer"
         private const val ACTION_USB_PERMISSION = "com.flutter_pos_printer.USB_PERMISSION"
 
-        // Constants that indicate the current connection state
-        const val STATE_USB_NONE = 0 // we're doing nothing
-        const val STATE_USB_CONNECTING = 2 // now initiating an outgoing connection
-        const val STATE_USB_CONNECTED = 3 // now connected to a remote device
+        const val STATE_USB_NONE = 0
+        const val STATE_USB_CONNECTING = 2
+        const val STATE_USB_CONNECTED = 3
 
         private val printLock = Any()
 
