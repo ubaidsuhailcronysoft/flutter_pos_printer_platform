@@ -188,6 +188,16 @@ class USBPrinterService private constructor(private var mHandler: Handler?) {
     }
 
     val usbInterface = mUsbDevice!!.getInterface(0)
+
+        val cls = usbInterface.interfaceClass
+        if (cls == UsbConstants.USB_CLASS_MASS_STORAGE ||
+            cls == UsbConstants.USB_CLASS_HID ||
+            cls == UsbConstants.USB_CLASS_HUB ||
+            cls == UsbConstants.USB_CLASS_AUDIO ||
+            cls == UsbConstants.USB_CLASS_VIDEO) {
+            Log.e(LOG_TAG, "Not a printer, interface class = $cls")
+            return false
+        }
     for (i in 0 until usbInterface.endpointCount) {
         val ep = usbInterface.getEndpoint(i)
         if (ep.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
