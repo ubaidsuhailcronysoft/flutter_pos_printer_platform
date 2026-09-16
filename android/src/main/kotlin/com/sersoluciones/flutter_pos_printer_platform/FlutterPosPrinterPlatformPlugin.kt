@@ -142,7 +142,7 @@ class FlutterPosPrinterPlatformPlugin : FlutterPlugin, MethodCallHandler, Plugin
                 BluetoothConstants.MESSAGE_TOAST -> {
                     val bundle = msg.data
                     bundle?.getInt(BluetoothConnection.TOAST)?.let {
-                        Toast.makeText(context, context!!.getString(it), Toast.LENGTH_SHORT).show()
+                        //Toast.makeText(context, context!!.getString(it), Toast.LENGTH_SHORT).show()
                     }
                 }
                 BluetoothConstants.MESSAGE_START_SCANNING -> {
