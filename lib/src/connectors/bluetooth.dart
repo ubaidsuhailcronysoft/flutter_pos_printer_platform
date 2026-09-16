@@ -117,7 +117,7 @@ class BluetoothPrinterConnector implements PrinterConnector<BluetoothPrinterInpu
   /// this device is low energy [isBle]
   Stream<PrinterDevice> discovery({
     bool isBle = false,
-    Duration? timeout = const Duration(seconds: 7),
+    Duration? timeout = const Duration(seconds: 12),
   }) async* {
     final killStreams = <Stream>[];
     killStreams.add(_stopScanPill);

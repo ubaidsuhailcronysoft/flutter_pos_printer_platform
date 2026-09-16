@@ -12,6 +12,10 @@ import android.util.Log
 import com.sersoluciones.flutter_pos_printer_platform.models.LocalBluetoothDevice
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.Result
+import android.content.BroadcastReceiver
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 
 
 class BluetoothService(private var bluetoothHandler: Handler?) {
@@ -32,6 +36,8 @@ class BluetoothService(private var bluetoothHandler: Handler?) {
     }
     private var devicesBle: MutableList<LocalBluetoothDevice> = mutableListOf()
 
+    private var discoveryReceiver: BroadcastReceiver? = null
+
     init {
         scanning = false
     }
@@ -44,28 +50,91 @@ class BluetoothService(private var bluetoothHandler: Handler?) {
     // Scan bluetooth
     ////////////////////////////////////////////////////////////////////////////////////////////////
     fun scanBluDevice(mChannel: MethodChannel) {
-        val list = ArrayList<HashMap<*, *>>()
         bluetoothHandler?.obtainMessage(BluetoothConstants.MESSAGE_START_SCANNING, -1, -1)
             ?.sendToTarget()
+
+        // 1) PAIRED devices (existing behavior)
         val pairedDevices: Set<BluetoothDevice>? = mBluetoothAdapter.bondedDevices
         pairedDevices?.forEach { device ->
-            val deviceName =
-                if (device.name == null) device.address else device.name
-            val deviceHardwareAddress = device.address // MAC address
+            val deviceName = if (device.name == null) device.address else device.name
             val deviceMap: HashMap<String?, String?> = HashMap()
             deviceMap["name"] = deviceName
-            deviceMap["address"] = deviceHardwareAddress
-            list.add(deviceMap)
-            Log.d(TAG, "deviceName $deviceName deviceHardwareAddress $deviceHardwareAddress")
-
+            deviceMap["address"] = device.address
             mChannel.invokeMethod("ScanResult", deviceMap)
-
-//            currentActivity?.runOnUiThread { channel.invokeMethod("ScanResult", deviceMap) }
-//            devicesSink?.success(deviceMap)
         }
 
-        bluetoothHandler?.obtainMessage(BluetoothConstants.MESSAGE_STOP_SCANNING, -1, -1)
-            ?.sendToTarget()
+        // 2) NEARBY UNPAIRED devices (classic discovery)
+        startClassicDiscovery(mChannel)
+        // NOTE: STOP_SCANNING ab discovery finish pe bhejenge, yahan nahi.
+    }
+
+    private fun startClassicDiscovery(mChannel: MethodChannel) {
+        val ctx = currentActivity ?: run {
+            bluetoothHandler?.obtainMessage(BluetoothConstants.MESSAGE_STOP_SCANNING, -1, -1)
+                ?.sendToTarget()
+            return
+        }
+
+        stopClassicDiscovery(ctx)
+
+        discoveryReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                when (intent.action) {
+                    BluetoothDevice.ACTION_FOUND -> {
+                        val device: BluetoothDevice? =
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                                intent.getParcelableExtra(
+                                    BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                            else
+                                @Suppress("DEPRECATION")
+                                intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+
+                        device?.let {
+                            val name = it.name ?: it.address
+                            val map: HashMap<String?, String?> = HashMap()
+                            map["name"] = name
+                            map["address"] = it.address
+                            mChannel.invokeMethod("ScanResult", map)
+                        }
+                    }
+                    BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
+                        stopClassicDiscovery(ctx)
+                        bluetoothHandler?.obtainMessage(
+                            BluetoothConstants.MESSAGE_STOP_SCANNING, -1, -1)?.sendToTarget()
+                    }
+                }
+            }
+        }
+
+        val filter = IntentFilter().apply {
+            addAction(BluetoothDevice.ACTION_FOUND)
+            addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ctx.registerReceiver(discoveryReceiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            ctx.registerReceiver(discoveryReceiver, filter)
+        }
+
+        try {
+            if (mBluetoothAdapter.isDiscovering) mBluetoothAdapter.cancelDiscovery()
+            mBluetoothAdapter.startDiscovery()
+        } catch (e: Exception) {
+            Log.e(TAG, "startDiscovery failed: ${e.message}")
+            stopClassicDiscovery(ctx)
+            bluetoothHandler?.obtainMessage(
+                BluetoothConstants.MESSAGE_STOP_SCANNING, -1, -1)?.sendToTarget()
+        }
+    }
+
+    private fun stopClassicDiscovery(ctx: Context) {
+        try {
+            if (mBluetoothAdapter.isDiscovering) mBluetoothAdapter.cancelDiscovery()
+        } catch (_: Exception) {}
+        discoveryReceiver?.let {
+            try { ctx.unregisterReceiver(it) } catch (_: Exception) {}
+        }
+        discoveryReceiver = null
     }
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
