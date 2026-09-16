@@ -12,7 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Message
 import android.util.Log
-import android.widget.Toast
+//import android.widget.Toast
 import androidx.annotation.NonNull
 import androidx.core.app.ActivityCompat
 import androidx.core.app.ActivityCompat.startActivityForResult
@@ -475,7 +475,7 @@ class FlutterPosPrinterPlatformPlugin : FlutterPlugin, MethodCallHandler, Plugin
 
                 }
                 if (!grant) {
-                    Toast.makeText(context, R.string.not_permissions, Toast.LENGTH_LONG).show()
+//                    Toast.makeText(context, R.string.not_permissions, Toast.LENGTH_LONG).show()
                 } else {
                     if (verifyIsBluetoothIsOn() && isScan)
                         if (isBle) bluetoothService.scanBleDevice(channel!!) else bluetoothService.scanBluDevice(channel!!)
