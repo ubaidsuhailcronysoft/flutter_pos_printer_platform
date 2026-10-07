@@ -83,14 +83,12 @@ class FlutterPosPrinterPlatformPlugin : FlutterPlugin, MethodCallHandler, Plugin
 
     private val bluetoothHandler = object : Handler(Looper.getMainLooper()) {
 
-        private val bluetoothStatus: Int
-            get() = BluetoothService.bluetoothConnection?.state ?: 99
-
         override fun handleMessage(msg: Message) {
             super.handleMessage(msg)
             when (msg.what) {
                 BluetoothConstants.MESSAGE_STATE_CHANGE -> {
-                    when (bluetoothStatus) {
+                    // msg.arg1 = message bhejte waqt ki state (baad me state badal bhi jaye to farq nahi)
+                    when (msg.arg1) {
                         BluetoothConstants.STATE_CONNECTED -> {
                             Log.w(TAG, " -------------------------- connection BT STATE_CONNECTED ")
                             if (msg.obj != null)
@@ -160,7 +158,6 @@ class FlutterPosPrinterPlatformPlugin : FlutterPlugin, MethodCallHandler, Plugin
         }
 
     }
-
 
 
     override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
