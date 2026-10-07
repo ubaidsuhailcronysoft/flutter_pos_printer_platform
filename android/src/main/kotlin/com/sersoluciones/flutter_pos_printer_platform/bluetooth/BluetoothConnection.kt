@@ -77,7 +77,10 @@ class BluetoothConnection constructor(handler: Handler) : IBluetoothConnection {
      */
     @Synchronized
     override fun connect(address: String, result: MethodChannel.Result) {
-        if (!address.matches(Regex(BluetoothConstants.BLUETOOTH_REGEX))) return
+        if (!address.matches(Regex(BluetoothConstants.BLUETOOTH_REGEX))) {
+            result.success(false)
+            return
+        }
         Log.d(TAG, "connect to: $address")
         val device = mAdapter.getRemoteDevice(address)
 

@@ -46,8 +46,14 @@ class BluetoothBleConnection(
      * connect to bluetooth device
      */
     override fun connect(address: String, result: MethodChannel.Result) {
-        if (!address.matches(Regex(BluetoothConstants.BLUETOOTH_REGEX))) return
-        if (mState == BluetoothConstants.STATE_CONNECTED) return
+        if (!address.matches(Regex(BluetoothConstants.BLUETOOTH_REGEX))) {
+            result.success(false)
+            return
+        }
+        if (mState == BluetoothConstants.STATE_CONNECTED) {
+            result.success(true)
+            return
+        }
         state = BluetoothConstants.STATE_CONNECTING
 
         BluetoothAdapter.getDefaultAdapter()?.let { adapter ->
@@ -84,6 +90,8 @@ class BluetoothBleConnection(
             // connect to the GATT server on the device
         } ?: run {
             Log.w(TAG, "BluetoothAdapter not initialized")
+            state = BluetoothConstants.STATE_NONE
+            result.success(false)
             return
         }
 
