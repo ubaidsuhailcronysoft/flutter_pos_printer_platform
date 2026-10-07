@@ -221,76 +221,68 @@ class BluetoothConnection constructor(handler: Handler) : IBluetoothConnection {
         private val mmDevice: BluetoothDevice,
         private val mmResult: MethodChannel.Result,
     ) : Thread() {
-        private val mmSocket: BluetoothSocket?
-        override fun run() {
-//            Log.i(TAG, "BEGIN mConnectThread");
-            name = "ConnectThread"
-            if (mmSocket == null) {
+        @Volatile
+        private var mmSocket: BluetoothSocket? = null
 
-                // Reset the ConnectThread because we're done
-                synchronized(this@BluetoothConnection) { mConnectThread = null }
-                connectionFailed(mmResult)
-                return
-            }
+        @Volatile
+        private var cancelled = false
+
+        override fun run() {
+            name = "ConnectThread"
 
             // Always cancel discovery because it will slow down a connection
             mAdapter.cancelDiscovery()
 
-            // Make a connection to the BluetoothSocket
-            try {
-                // This is a blocking call and will only return on a
-                // successful connection or an exception
-                mmSocket.connect()
-            } catch (e: IOException) {
-
-                // Close the socket
-                try {
-                    mmSocket.close()
-                } catch (e2: IOException) {
-                    Log.e(TAG, "unable to close() socket during connection failure")
-                }
-
-                // Reset the ConnectThread because we're done
-                synchronized(this@BluetoothConnection) { mConnectThread = null }
-                connectionFailed(mmResult)
-                return
-            } catch (e: NullPointerException) {
-                try {
-                    mmSocket.close()
-                } catch (e2: IOException) {
-                }
-                synchronized(this@BluetoothConnection) { mConnectThread = null }
-                connectionFailed(mmResult)
-                return
-            }
+            // Pehle insecure (mojooda printers), phir secure (LANDI jaise devices)
+            var socket = tryConnect(secure = false)
+            if (socket == null && !cancelled) socket = tryConnect(secure = true)
 
             // Reset the ConnectThread because we're done
             synchronized(this@BluetoothConnection) { mConnectThread = null }
 
+            if (socket == null) {
+                connectionFailed(mmResult)
+                return
+            }
+
             // Start the connected thread
-            connected(mmSocket, mmDevice, mmResult)
+            connected(socket, mmDevice, mmResult)
+        }
+
+        private fun tryConnect(secure: Boolean): BluetoothSocket? {
+            val socket = try {
+                if (secure) mmDevice.createRfcommSocketToServiceRecord(SampleGattAttributes.SPP_UUID)
+                else mmDevice.createInsecureRfcommSocketToServiceRecord(SampleGattAttributes.SPP_UUID)
+            } catch (e: IOException) {
+                Log.e(TAG, "Socket create failed (secure=$secure)")
+                return null
+            }
+            mmSocket = socket
+
+            return try {
+                // This is a blocking call and will only return on a
+                // successful connection or an exception
+                socket.connect()
+                Log.d(TAG, "Connected (secure=$secure)")
+                socket
+            } catch (e: Exception) {
+                Log.w(TAG, "Connect failed (secure=$secure): ${e.message}")
+                try {
+                    socket.close()
+                } catch (e2: IOException) {
+                    Log.e(TAG, "unable to close() socket during connection failure")
+                }
+                null
+            }
         }
 
         fun cancel() {
+            cancelled = true
             try {
                 mmSocket?.close()
             } catch (e: IOException) {
                 Log.e(TAG, "close() of connect socket failed")
             }
-        }
-
-        init {
-            var tmp: BluetoothSocket? = null
-
-            // Get a BluetoothSocket for a connection with the
-            // given BluetoothDevice
-            try {
-                tmp = mmDevice.createInsecureRfcommSocketToServiceRecord(SampleGattAttributes.SPP_UUID)
-            } catch (e: IOException) {
-                Log.e(TAG, "Socket: create() failed")
-            }
-            mmSocket = tmp
-
         }
     }
 
