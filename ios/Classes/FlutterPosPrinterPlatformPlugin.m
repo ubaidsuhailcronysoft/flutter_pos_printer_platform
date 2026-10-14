@@ -75,19 +75,33 @@
     result(nil);
   } else if([@"connect" isEqualToString:call.method]) {
     NSDictionary *device = [call arguments];
-    @try {
-      NSLog(@"connect device begin -> %@", [device objectForKey:@"name"]);
-      CBPeripheral *peripheral = [_scannedPeripherals objectForKey:[device objectForKey:@"address"]];
-        
-      self.state = ^(ConnectState state) {
-        [self updateConnectState:state];
-      };
-      [Manager connectPeripheral:peripheral options:nil timeout:2 connectBlack: self.state];
-      
-      result(nil);
-    } @catch(FlutterError *e) {
-      result(e);
+    NSString *address = [device objectForKey:@"address"];
+    NSLog(@"connect device begin -> %@ | %@", [device objectForKey:@"name"], address);
+
+    CBPeripheral *peripheral = [_scannedPeripherals objectForKey:address];
+
+    // Printer scan list mein nahi mila to nil ke saath connect mat karo
+    if (peripheral == nil) {
+        NSLog(@"connect: peripheral NOT found for %@. Known: %@", address, [_scannedPeripherals allKeys]);
+        [self updateConnectState:CONNECT_STATE_FAILT];
+        result(nil);
+        return;
     }
+
+    // Pehle scan band karo, phir connect
+    [Manager stopScan];
+
+    __weak typeof(self) weakSelf = self;
+    self.state = ^(ConnectState state) {
+        [weakSelf updateConnectState:state];
+    };
+
+    // Thoda ruk kar connect, timeout 2 se 10 second
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [Manager connectPeripheral:peripheral options:nil timeout:10 connectBlack:weakSelf.state];
+    });
+
+    result(nil);
   } else if([@"disconnect" isEqualToString:call.method]) {
     @try {
       [Manager close];
@@ -106,11 +120,9 @@
            char cArray[len];
 
            for (int i = 0; i < len; ++i) {
-//               NSLog(@"** ind_%d (d): %@, %d", i, bytes[i], [bytes[i] charValue]);
                cArray[i] = [bytes[i] charValue];
            }
            NSData *data2 = [NSData dataWithBytes:cArray length:sizeof(cArray)];
-//           NSLog(@"bytes in hex: %@", [data2 description]);
            [Manager write:data2];
            result(nil);
        } @catch(FlutterError *e) {
