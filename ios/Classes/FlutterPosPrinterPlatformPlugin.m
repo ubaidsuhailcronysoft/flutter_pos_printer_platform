@@ -176,7 +176,6 @@
 
     self.activePeripheral = peripheral;
     peripheral.delegate = self;
-    [self sendState:1];
     [self.central connectPeripheral:peripheral options:nil];
 
     self.connectTimer = [NSTimer scheduledTimerWithTimeInterval:10.0
