@@ -101,6 +101,50 @@
   NSLog(@"scan started");
 }
 
+#pragma mark - Printer service selection
+
+// Receipt printers ki jaani-pehchaani services (pehle inhe try karo)
+- (BOOL)isKnownPrinterService:(CBUUID *)uuid {
+  NSArray<NSString *> *known = @[
+    @"18F0",
+    @"FFE0",
+    @"FF00",
+    @"49535343-FE7D-4AE5-8FA9-9FAFD205E455",
+    @"E7810A71-73AE-499D-8C15-FAA9AEF0C3F2",
+  ];
+  for (NSString *s in known) {
+    if ([uuid isEqual:[CBUUID UUIDWithString:s]]) return YES;
+  }
+  return NO;
+}
+
+// Jo services pakka printing ke liye nahi hain
+- (BOOL)isBlockedService:(CBUUID *)uuid {
+  NSArray<NSString *> *blocked = @[
+    @"180A",                                   // Device Information
+    @"180F",                                   // Battery
+    @"1800",                                   // Generic Access
+    @"1801",                                   // Generic Attribute
+    @"802A0000-4EF4-4E59-B573-2BED4A4AC159",   // Epson setup
+    @"736D6170-1C77-49D0-A141-7B7653A262BB",   // Epson setup
+  ];
+  for (NSString *s in blocked) {
+    if ([uuid isEqual:[CBUUID UUIDWithString:s]]) return YES;
+  }
+  return NO;
+}
+
+- (CBCharacteristic *)writableCharIn:(CBService *)service {
+  CBCharacteristic *withResponse = nil;
+  for (CBCharacteristic *c in service.characteristics) {
+    if (c.properties & CBCharacteristicPropertyWriteWithoutResponse) return c;
+    if ((c.properties & CBCharacteristicPropertyWrite) && withResponse == nil) {
+      withResponse = c;
+    }
+  }
+  return withResponse;
+}
+
 #pragma mark - Method channel
 
 - (void)handleMethodCall:(FlutterMethodCall*)call result:(FlutterResult)result {
@@ -340,39 +384,55 @@ didDiscoverCharacteristicsForService:(CBService *)service
              error:(NSError *)error {
   self.servicesPending--;
 
-  BOOL isDeviceInfo = [service.UUID isEqual:[CBUUID UUIDWithString:@"180A"]];
+  // Saari services ke characteristics aane tak ruko, phir sabse achhi chuno
+  if (self.servicesPending > 0 || self.writeChar != nil) return;
 
-  if (self.writeChar == nil && !isDeviceInfo) {
-    CBCharacteristic *withResponse = nil;
-    for (CBCharacteristic *c in service.characteristics) {
-      if (c.properties & CBCharacteristicPropertyWriteWithoutResponse) {
-        self.writeChar = c;
-        break;
-      }
-      if ((c.properties & CBCharacteristicPropertyWrite) && withResponse == nil) {
-        withResponse = c;
-      }
-    }
-    if (self.writeChar == nil) self.writeChar = withResponse;
+  CBCharacteristic *chosen = nil;
+  CBService *chosenService = nil;
 
-    if (self.writeChar != nil) {
-      NSLog(@"printer ready: service %@, write char %@",
-            service.UUID.UUIDString, self.writeChar.UUID.UUIDString);
-      [self stopConnectTimer];
-      [self sendState:2];
+  // 1. Jaani-pehchaani printer service
+  for (CBService *s in peripheral.services) {
+    if ([self isKnownPrinterService:s.UUID]) {
+      chosen = [self writableCharIn:s];
+      if (chosen) { chosenService = s; break; }
     }
   }
 
-  if (self.servicesPending <= 0 && self.writeChar == nil) {
-    [self failConnection:@"no writable characteristic"];
+  // 2. Fallback: koi bhi writable characteristic, blocked services chhod kar
+  if (chosen == nil) {
+    for (CBService *s in peripheral.services) {
+      if ([self isBlockedService:s.UUID]) continue;
+      chosen = [self writableCharIn:s];
+      if (chosen) { chosenService = s; break; }
+    }
   }
+
+  if (chosen == nil) {
+    [self failConnection:@"no printer service found"];
+    return;
+  }
+
+  self.writeChar = chosen;
+  NSLog(@"printer ready: service %@, write char %@",
+        chosenService.UUID.UUIDString, chosen.UUID.UUIDString);
+  [self stopConnectTimer];
+  [self sendState:2];
 }
 
 - (void)peripheral:(CBPeripheral *)peripheral
 didWriteValueForCharacteristic:(CBCharacteristic *)characteristic
              error:(NSError *)error {
-  if (error != nil) NSLog(@"write error: %@", error.localizedDescription);
   self.waitingForWriteAck = NO;
+
+  if (error != nil) {
+    // Device data reject kar raha hai: shayad printer nahi hai.
+    // Baaki data mat bhejo, connection band karo.
+    NSLog(@"write error: %@ -> stopping and disconnecting", error.localizedDescription);
+    [self.writeQueue removeAllObjects];
+    [self failConnection:@"device rejected print data"];
+    return;
+  }
+
   [self pumpWrites];
 }
 
