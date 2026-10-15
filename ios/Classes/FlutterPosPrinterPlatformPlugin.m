@@ -2,7 +2,8 @@
 #import <CoreBluetooth/CoreBluetooth.h>
 
 // iOS BLE printing via CoreBluetooth (GSDK ki jagah)
-// connect tab tak jawab nahi deta jab tak printer ready na ho
+// - connect tab tak jawab nahi deta jab tak printer ready na ho
+// - ek saath aane wale connect calls safely sambhalta hai
 
 @interface FlutterPosPrinterPlatformPlugin () <CBCentralManagerDelegate, CBPeripheralDelegate>
 @property(nonatomic, retain) FlutterMethodChannel *channel;
@@ -16,7 +17,10 @@
 @property(nonatomic, strong) CBCharacteristic *writeChar;
 @property(nonatomic, assign) NSInteger servicesPending;
 @property(nonatomic, strong) NSTimer *connectTimer;
-@property(nonatomic, copy) FlutterResult pendingConnectResult;
+
+// Connect ka intezaar kar rahe saare Dart calls
+@property(nonatomic, strong) NSMutableArray<FlutterResult> *pendingConnectResults;
+@property(nonatomic, assign) BOOL isConnecting;
 
 @property(nonatomic, strong) NSMutableArray<NSData *> *writeQueue;
 @property(nonatomic, assign) BOOL waitingForWriteAck;
@@ -35,6 +39,7 @@
   instance.channel = channel;
   instance.scannedPeripherals = [NSMutableDictionary new];
   instance.writeQueue = [NSMutableArray new];
+  instance.pendingConnectResults = [NSMutableArray new];
 
   BluetoothPrintStreamHandler* stateStreamHandler = [[BluetoothPrintStreamHandler alloc] init];
   [stateChannel setStreamHandler:stateStreamHandler];
@@ -54,6 +59,17 @@
   return self.central;
 }
 
+// Intezaar kar rahe saare connect calls ko ek baar jawab do
+- (void)finishPendingConnects:(BOOL)ok {
+  self.isConnecting = NO;
+  if (self.pendingConnectResults.count == 0) return;
+  NSArray<FlutterResult> *results = [self.pendingConnectResults copy];
+  [self.pendingConnectResults removeAllObjects];
+  for (FlutterResult r in results) {
+    r(@(ok));
+  }
+}
+
 // 0 = disconnected/failed, 1 = connecting, 2 = connected
 - (void)sendState:(NSInteger)value {
   dispatch_async(dispatch_get_main_queue(), ^{
@@ -61,11 +77,8 @@
     if (self.stateStreamHandler.sink != nil) {
       self.stateStreamHandler.sink(@(value));
     }
-    // connect ka intezaar kar rahe Dart ko jawab do
-    if (self.pendingConnectResult != nil && value != 1) {
-      FlutterResult r = self.pendingConnectResult;
-      self.pendingConnectResult = nil;
-      r(@(value == 2));
+    if (value != 1) {
+      [self finishPendingConnects:(value == 2)];
     }
   });
 }
@@ -182,11 +195,20 @@
     NSLog(@"connect device begin -> %@ | %@", device[@"name"], address);
     [self ensureCentral];
 
-    // Pehle se isi printer se connected
-    if (self.activePeripheral != nil && self.writeChar != nil &&
-        [self.activePeripheral.identifier.UUIDString isEqualToString:address]) {
+    BOOL sameDevice = (self.activePeripheral != nil &&
+                       [self.activePeripheral.identifier.UUIDString isEqualToString:address]);
+
+    // 1. Pehle se isi printer se connected
+    if (sameDevice && self.writeChar != nil) {
       [self sendState:2];
       result(@(YES));
+      return;
+    }
+
+    // 2. Isi printer ka connect abhi chal raha hai: dobara shuru mat karo, saath mein intezaar karo
+    if (sameDevice && self.isConnecting) {
+      NSLog(@"connect: already connecting, waiting with it");
+      [self.pendingConnectResults addObject:result];
       return;
     }
 
@@ -204,22 +226,23 @@
       return;
     }
 
+    // 3. Kisi doosre printer ka connect chal raha tha: use fail batao
+    if (self.isConnecting) {
+      [self finishPendingConnects:NO];
+    }
+
     // Purana connection band
     if (self.activePeripheral != nil && self.activePeripheral != peripheral) {
       [self.central cancelPeripheralConnection:self.activePeripheral];
     }
     [self resetConnection];
 
-    // Pichhla connect abhi bhi wait kar raha ho to use fail bata do
-    if (self.pendingConnectResult != nil) {
-      self.pendingConnectResult(@(NO));
-      self.pendingConnectResult = nil;
-    }
-
     if (self.central.isScanning) [self.central stopScan];
 
     self.activePeripheral = peripheral;
     peripheral.delegate = self;
+    self.isConnecting = YES;
+    [self.pendingConnectResults addObject:result];
     [self.central connectPeripheral:peripheral options:nil];
 
     self.connectTimer = [NSTimer scheduledTimerWithTimeInterval:10.0
@@ -227,9 +250,7 @@
                                                        selector:@selector(onConnectTimeout)
                                                        userInfo:nil
                                                         repeats:NO];
-
-    // connected ya fail hone par sendState se jawab jayega
-    self.pendingConnectResult = result;
+    // connected ya fail hone par sendState se sabko jawab jayega
 
   } else if ([@"disconnect" isEqualToString:call.method]) {
     if (self.activePeripheral != nil) {
@@ -344,6 +365,7 @@
 }
 
 - (void)centralManager:(CBCentralManager *)central didConnectPeripheral:(CBPeripheral *)peripheral {
+  if (peripheral != self.activePeripheral) return; // purana callback, ignore
   NSLog(@"BLE connected, discovering services...");
   [peripheral discoverServices:nil];
 }
@@ -351,6 +373,7 @@
 - (void)centralManager:(CBCentralManager *)central
 didFailToConnectPeripheral:(CBPeripheral *)peripheral
                  error:(NSError *)error {
+  if (peripheral != self.activePeripheral) return;
   [self failConnection:error.localizedDescription ?: @"failed to connect"];
 }
 
@@ -368,6 +391,7 @@ didDisconnectPeripheral:(CBPeripheral *)peripheral
 #pragma mark - CBPeripheralDelegate
 
 - (void)peripheral:(CBPeripheral *)peripheral didDiscoverServices:(NSError *)error {
+  if (peripheral != self.activePeripheral) return;
   if (error != nil || peripheral.services.count == 0) {
     [self failConnection:@"no services"];
     return;
@@ -382,6 +406,7 @@ didDisconnectPeripheral:(CBPeripheral *)peripheral
 - (void)peripheral:(CBPeripheral *)peripheral
 didDiscoverCharacteristicsForService:(CBService *)service
              error:(NSError *)error {
+  if (peripheral != self.activePeripheral) return;
   self.servicesPending--;
 
   // Saari services ke characteristics aane tak ruko, phir sabse achhi chuno
@@ -422,11 +447,11 @@ didDiscoverCharacteristicsForService:(CBService *)service
 - (void)peripheral:(CBPeripheral *)peripheral
 didWriteValueForCharacteristic:(CBCharacteristic *)characteristic
              error:(NSError *)error {
+  if (peripheral != self.activePeripheral) return;
   self.waitingForWriteAck = NO;
 
   if (error != nil) {
     // Device data reject kar raha hai: shayad printer nahi hai.
-    // Baaki data mat bhejo, connection band karo.
     NSLog(@"write error: %@ -> stopping and disconnecting", error.localizedDescription);
     [self.writeQueue removeAllObjects];
     [self failConnection:@"device rejected print data"];
@@ -437,6 +462,7 @@ didWriteValueForCharacteristic:(CBCharacteristic *)characteristic
 }
 
 - (void)peripheralIsReadyToSendWriteWithoutResponse:(CBPeripheral *)peripheral {
+  if (peripheral != self.activePeripheral) return;
   [self pumpWrites];
 }
 
